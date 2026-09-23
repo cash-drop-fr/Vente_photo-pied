@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PixVault — Marketplace photo</title>
+<link rel="stylesheet" href="style.css">
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+
+<style>
+/* PixVault — admin fullscreen image preview */
+.pv-fullscreen-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 99999;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0,0,0,.92);
+}
+.pv-fullscreen-overlay.is-open { display: flex; }
+.pv-fullscreen-overlay img {
+  max-width: 96vw;
+  max-height: 92vh;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  border-radius: 8px;
+  box-shadow: 0 10px 50px rgba(0,0,0,.5);
+}
+.pv-fullscreen-close {
+  position: absolute;
+  top: 16px;
+  right: 20px;
+  width: 44px;
+  height: 44px;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255,255,255,.14);
+  color: #fff;
+  font-size: 28px;
+  line-height: 44px;
+  cursor: pointer;
+}
+.pv-fullscreen-button {
+  cursor: pointer;
+}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">PixVault</div>
+  <nav>
+    <button class="nav-btn active" data-view="shop">Boutique</button>
+    <button class="nav-btn" data-view="sell">Vendre</button>
+    <button class="nav-btn" data-view="admin">Admin</button>
+  </nav>
+</header>
+
+<main>
+  <section id="shop" class="view active">
+    <div class="hero">
+      <span class="badge">Photos premium</span>
+      <h1>Découvre des photos exclusives.</h1>
+      <p>Les créateurs publient leurs œuvres. Chaque soumission est vérifiée avant sa mise en vente.</p>
+    </div>
+    <div id="shopGrid" class="grid"></div>
+  </section>
+
+  <section id="sell" class="view">
+    <div class="panel">
+      <h2>Mettre une photo en vente</h2>
+      <p class="muted">Envoie une photo, ajoute une description et fixe ton prix. La publication doit être approuvée par l'administrateur.</p>
+      <form id="sellForm">
+        <label>Titre<input id="title" required maxlength="80" placeholder="Ex. Sunset on the coast"></label>
+        <label>Description<textarea id="description" required maxlength="500" placeholder="Décris précisément la photo."></textarea></label>
+        <label>Prix (€)<input id="price" type="number" min="0.50" max="1000" step="0.50" required value="4.99"></label>
+        <label>Photo<input id="image" type="file" accept="image/jpeg,image/png,image/webp" required></label>
+        <label>Moyen de paiement
+          <select id="paymentType" required>
+            <option value="">Choisir…</option>
+            <option value="paypal">PayPal</option>
+            <option value="iban">IBAN / virement bancaire</option>
+            <option value="email">E-mail de paiement</option>
+            <option value="other">Autre</option>
+          </select>
+        </label>
+        <label>Coordonnée de paiement
+          <input id="paymentValue" required maxlength="150" placeholder="Ex. adresse e-mail PayPal ou coordonnée de paiement">
+        </label>
+        <p class="notice">Ces informations seront affichées aux acheteurs lorsqu’ils ouvrent l’annonce afin qu’ils puissent effectuer le paiement.</p>
+        <label class="check"><input id="rights" type="checkbox" required> Je confirme avoir le droit de vendre cette image et que sa description est exacte.</label>
+        <button class="primary" type="submit">Envoyer pour vérification</button>
+      </form>
+      <div id="sellMessage"></div>
+    </div>
+  </section>
+
+  <section id="admin" class="view">
+    <div id="adminLogin" class="panel">
+      <h2>Accès administrateur</h2>
+      <p class="muted">Connecte-toi pour consulter les soumissions et les informations de paiement des vendeurs.</p>
+      <form id="loginForm">
+        <label>E-mail<input id="adminEmail" type="email" autocomplete="username" required></label>
+        <label>Mot de passe<input id="adminPassword" type="password" autocomplete="current-password" required></label>
+        <button class="primary" type="submit">Se connecter</button>
+      </form>
+      <p id="loginMessage"></p>
+    </div>
+    <div id="adminPanel" class="panel hidden">
+      <div class="admin-head">
+        <div><h2>Modération</h2><p class="muted">Vérifie chaque soumission avant publication.</p></div>
+        <button id="reset" class="danger">Réinitialiser la démo</button>
+      </div>
+      <div id="adminList"></div>
+    </div>
+  </section>
+</main>
+
+<div id="modal" class="modal hidden">
+  <div class="modal-card">
+    <button id="closeModal" class="close">×</button>
+    <img id="modalImage" alt="">
+    <h2 id="modalTitle"></h2>
+    <p id="modalDescription"></p>
+    <strong id="modalPrice"></strong>
+    <button id="buyBtn" class="primary" style="display:none">Acheter — démo</button>
+    <small>Après le paiement, ajoute une capture ou une photo de ta preuve. L’administrateur la vérifiera avant de débloquer la photo.</small>
+  </div>
+</div>
+
+<script src="script.js"></script>
+<script>
+(function () {
+  function ensureOverlay() {
+    let overlay = document.getElementById('pvFullscreenOverlay');
+    if (overlay) return overlay;
+    overlay = document.createElement('div');
+    overlay.id = 'pvFullscreenOverlay';
+    overlay.className = 'pv-fullscreen-overlay';
+    overlay.setAttribute('aria-hidden', 'true');
+    overlay.innerHTML =
+      '<button class="pv-fullscreen-close" type="button" aria-label="Fermer">×</button>' +
+      '<img alt="Aperçu plein écran">';
+    document.body.appendChild(overlay);
+
+    overlay.querySelector('.pv-fullscreen-close').addEventListener('click', function (e) {
+      e.stopPropagation();
+      overlay.classList.remove('is-open');
+      overlay.setAttribute('aria-hidden', 'true');
+    });
+    overlay.addEventListener('click', function (e) {
+      if (e.target === overlay) {
+        overlay.classList.remove('is-open');
+        overlay.setAttribute('aria-hidden', 'true');
+      }
+    });
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') {
+        overlay.classList.remove('is-open');
+        overlay.setAttribute('aria-hidden', 'true');
+      }
+    });
+    return overlay;
+  }
+
+  window.PixVaultOpenFullscreen = function (src, alt) {
+    if (!src) return;
+    const overlay = ensureOverlay();
+    const img = overlay.querySelector('img');
+    img.src = src;
+    img.alt = alt || 'Aperçu plein écran';
+    overlay.classList.add('is-open');
+    overlay.setAttribute('aria-hidden', 'false');
+  };
+
+  // Automatically make admin-side images open in fullscreen when clicked.
+  document.addEventListener('click', function (e) {
+    const target = e.target.closest(
+      '.admin-panel img, .admin img, #admin img, [data-admin] img, .payment-proof img, .proof-preview img, .admin-preview img'
+    );
+    if (!target) return;
+    e.preventDefault();
+    e.stopPropagation();
+    window.PixVaultOpenFullscreen(target.currentSrc || target.src, target.alt);
+  });
+})();
+</script>
+</body>
+</html>
